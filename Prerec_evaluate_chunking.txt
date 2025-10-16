@@ -1,0 +1,73 @@
+import sys
+sys.path.append("src")
+
+import os
+import numpy as np
+from scipy.io import wavfile
+import time
+import jiwer
+
+from simple_vad_chunker import SimpleVADChunker, ChunkConfig
+from whisper_asr import WhisperASR
+
+class Evaluation:
+    def __init__(self, wav_path, reference_text):
+        self.wav_path = wav_path
+        self.reference_text = reference_text.upper()
+        self.sample_rate = None
+        self.audio = None
+        self.chunks = []
+        self.asr = None
+    
+    def load_audio(self):
+        sr, audio = wavfile.read(self.wav_path)
+        self.sample_rate = sr
+        if len(audio.shape) > 1:
+            audio = audio.mean(axis=1).astype(np.int16)
+        if sr != 16000:
+            from scipy.signal import resample_poly
+            audio = resample_poly(audio, 16000, sr).astype(np.int16)
+            self.sample_rate = 16000
+        self.audio = audio
+        print(f"Loaded audio '{self.wav_path}' at {self.sample_rate} Hz.")
+    
+    def chunk_audio(self):
+        chunk_cfg = ChunkConfig(sample_rate=self.sample_rate)
+        chunker = SimpleVADChunker(chunk_cfg)
+        self.chunks = chunker.process_audio_buffer(self.audio)
+        print(f"Produced {len(self.chunks)} chunks from audio.")
+    
+    def load_asr(self):
+        print("Loading Whisper ASR model...")
+        self.asr = WhisperASR("small")
+        print("Loaded Whisper model.")
+    
+    def transcribe_chunks(self):
+        results = []
+        for i, chunk in enumerate(self.chunks):
+            result = self.asr.transcribe_chunk(chunk.audio_data, sample_rate=self.sample_rate)
+            print(f"Chunk {i+1} [{chunk.start_ms}-{chunk.end_ms} ms]: '{result.text}' (confidence: {result.confidence:.2f})")
+            results.append(result.text)
+        return results
+    
+    def compute_wer(self, hypotheses):
+        combined_hypothesis = " ".join(hypotheses).upper()
+        wer = jiwer.wer(self.reference_text, combined_hypothesis)
+        print(f"\nOverall WER on combined chunks: {wer:.3f}")
+        return wer
+    
+    def run(self):
+        self.load_audio()
+        self.chunk_audio()
+        self.load_asr()
+        hypotheses = self.transcribe_chunks()
+        wer = self.compute_wer(hypotheses)
+        return wer
+
+if __name__ == "__main__":
+    # Replace below with your actual transcript of harvard.wav
+    ground_truth = "The stale smell of old beer lingers. it takes heat to bring out the odor. A cold dip restores health and zest. A salt pickle tastes fine with ham. Tacos al pastor are my favorite. A zestful food is the Hot Cross Bun."
+    
+    wav_file = "harvard.wav"
+    eval_instance = Evaluation(wav_file, ground_truth)
+    eval_instance.run()
